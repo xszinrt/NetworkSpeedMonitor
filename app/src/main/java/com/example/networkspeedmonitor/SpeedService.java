@@ -7,15 +7,21 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
+import android.net.TrafficStats;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import androidx.core.app.NotificationCompat;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
+import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URL;
+import java.net.HttpURLConnection;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -34,8 +40,7 @@ public class SpeedService extends Service {
     private boolean isRunning = false;
     private ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    // URLs للاختبار
-    private static final String TEST_URL = "https://speed.cloudflare.com/__down?bytes=5000000"; // 5MB
+    private static final String TEST_URL = "https://speed.cloudflare.com/__down?bytes=5000000";
     private static final String PING_URL = "https://cloudflare.com/cdn-cgi/trace";
 
     @Override
@@ -43,6 +48,21 @@ public class SpeedService extends Service {
         super.onCreate();
         createNotificationChannel();
         handler = new Handler(Looper.getMainLooper());
+        
+        // ✅ طلب تعطيل تحسين البطارية عند بدء الخدمة لأول مرة
+        requestDisableBatteryOptimizations();
+    }
+
+    private void requestDisableBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            }
+        }
     }
 
     @Override
@@ -67,21 +87,12 @@ public class SpeedService extends Service {
                 if (!isRunning) return;
 
                 executor.execute(() -> {
-                    // قياس Ping
                     long ping = measurePing();
-                    
-                    // قياس سرعة التحميل
                     double downloadSpeed = measureDownloadSpeed();
-                    
-                    // قياس سرعة الرفع (اختياري - يمكن إضافته لاحقاً)
-                    double uploadSpeed = 0;
-                    
-                    // تحديث الواجهة والإشعار
-                    updateUI(downloadSpeed, uploadSpeed, ping);
-                    updateNotification(downloadSpeed, uploadSpeed, ping);
+                    updateUI(downloadSpeed, 0, ping);
+                    updateNotification(downloadSpeed, 0, ping);
                 });
 
-                // قياس كل 30 ثانية (لتجنب استهلاك البيانات)
                 handler.postDelayed(this, 30000);
             }
         };
@@ -91,17 +102,12 @@ public class SpeedService extends Service {
     private long measurePing() {
         try {
             long start = System.currentTimeMillis();
-            URL url = new URL(PING_URL);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(3000);
-            connection.setReadTimeout(3000);
-            connection.setRequestMethod("GET");
-            int responseCode = connection.getResponseCode();
-            if (responseCode == 200) {
+            InetAddress address = InetAddress.getByName("8.8.8.8");
+            boolean reachable = address.isReachable(3000);
+            if (reachable) {
                 return System.currentTimeMillis() - start;
             }
-            connection.disconnect();
-        } catch (Exception e) {
+        } catch (IOException e) {
             e.printStackTrace();
         }
         return -1;
@@ -120,22 +126,15 @@ public class SpeedService extends Service {
             
             int responseCode = connection.getResponseCode();
             if (responseCode == HttpURLConnection.HTTP_OK) {
-                // قراءة البيانات وحساب الحجم
-                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                char[] buffer = new char[8192];
-                int bytesRead;
-                long totalBytes = 0;
-                while ((bytesRead = reader.read(buffer)) != -1) {
-                    totalBytes += bytesRead * 2; // تقريبي لتحويل char إلى بايت
-                }
-                reader.close();
+                int contentLength = connection.getContentLength();
+                if (contentLength <= 0) return 0;
                 
+                connection.getInputStream().close();
                 long end = System.currentTimeMillis();
                 long timeMs = end - start;
                 
                 if (timeMs > 0) {
-                    // حساب السرعة بالميجابت في الثانية
-                    double megabits = (totalBytes * 8.0) / 1000000.0;
+                    double megabits = (contentLength * 8.0) / 1000000.0;
                     double seconds = timeMs / 1000.0;
                     return megabits / seconds;
                 }
@@ -180,7 +179,7 @@ public class SpeedService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("📡 Speed Monitor")
-                .setContentText(String.format(Locale.US, "⬇️ %.1f Mbps | 🕒 %s | %s", download, pingText, time))
+                .setContentText(String.format(Locale.US, "⬇️ %.1f Mbps | 🕒 %s", download, pingText))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(
                         String.format("Download: %.2f Mbps\nPing: %s\nLast update: %s", download, pingText, time)))
                 .setSmallIcon(android.R.drawable.ic_menu_upload)
