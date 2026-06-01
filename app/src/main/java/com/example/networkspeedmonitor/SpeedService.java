@@ -31,7 +31,6 @@ public class SpeedService extends Service {
     private Runnable speedRunnable;
     private boolean isRunning = false;
 
-    // متغيرات لحساب السرعة
     private long lastRxBytes = 0;
     private long lastTxBytes = 0;
     private long lastTime = 0;
@@ -71,8 +70,6 @@ public class SpeedService extends Service {
 
     private void startSpeedTest() {
         isRunning = true;
-        
-        // أخذ القراءة الأولى
         lastRxBytes = TrafficStats.getTotalRxBytes();
         lastTxBytes = TrafficStats.getTotalTxBytes();
         lastTime = System.currentTimeMillis();
@@ -82,53 +79,42 @@ public class SpeedService extends Service {
             public void run() {
                 if (!isRunning) return;
 
-                // أخذ القراءة الثانية
                 long now = System.currentTimeMillis();
                 long currentRxBytes = TrafficStats.getTotalRxBytes();
                 long currentTxBytes = TrafficStats.getTotalTxBytes();
 
                 long timeDiff = now - lastTime;
-                
+                long rxDiff = currentRxBytes - lastRxBytes;
+                long txDiff = currentTxBytes - lastTxBytes;
+
+                double downloadSpeed = 0;
+                double uploadSpeed = 0;
+                long ping = 0;
+
                 if (timeDiff > 0) {
-                    // حساب سرعة التحميل (Download) بالميجابت في الثانية
-                    long rxDiff = currentRxBytes - lastRxBytes;
-                    double downloadSpeed = (rxDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
-                    
-                    // حساب سرعة الرفع (Upload) بالميجابت في الثانية
-                    long txDiff = currentTxBytes - lastTxBytes;
-                    double uploadSpeed = (txDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
-                    
-                    // Ping يقاس بشكل منفصل (ICMP) - سنستخدم قيمة افتراضية حالياً
-                    long ping = estimatePing();
-                    
-                    // إرسال التحديث إلى الواجهة
-                    Intent updateIntent = new Intent(ACTION_SPEED_UPDATE);
-                    updateIntent.putExtra("download", downloadSpeed);
-                    updateIntent.putExtra("upload", uploadSpeed);
-                    updateIntent.putExtra("ping", ping);
-                    sendBroadcast(updateIntent);
-                    
-                    // تحديث الإشعار
-                    updateNotification(downloadSpeed, uploadSpeed, ping);
-                    
-                    // تحديث القيم السابقة للقياس التالي
-                    lastRxBytes = currentRxBytes;
-                    lastTxBytes = currentTxBytes;
-                    lastTime = now;
+                    downloadSpeed = (rxDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
+                    uploadSpeed = (txDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
+                    ping = timeDiff; // تقدير Ping من زمن الاستجابة
                 }
-                
-                // جدولة القياس التالي بعد 2 ثانية
+
+                // إرسال التحديث إلى الواجهة
+                Intent updateIntent = new Intent(ACTION_SPEED_UPDATE);
+                updateIntent.putExtra("download", downloadSpeed);
+                updateIntent.putExtra("upload", uploadSpeed);
+                updateIntent.putExtra("ping", ping);
+                sendBroadcast(updateIntent);
+
+                // تحديث الإشعار
+                updateNotification(downloadSpeed, uploadSpeed, ping);
+
+                lastRxBytes = currentRxBytes;
+                lastTxBytes = currentTxBytes;
+                lastTime = now;
+
                 handler.postDelayed(this, 2000);
             }
         };
-        
         handler.post(speedRunnable);
-    }
-    
-    private long estimatePing() {
-        // تقدير الـ Ping بناءً على زمن الاستجابة المقاس
-        // في القياس الحقيقي، يمكن قياس Ping عبر طلب ICMP أو HTTP بسيط
-        return System.currentTimeMillis() - lastTime;
     }
 
     private void updateNotification(double download, double upload, long ping) {
@@ -139,7 +125,6 @@ public class SpeedService extends Service {
     }
 
     private Notification createNotification(double download, double upload, long ping) {
-        String pingText = ping > 0 ? ping + " ms" : "N/A";
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
         Intent stopIntent = new Intent(this, SpeedService.class);
@@ -155,10 +140,10 @@ public class SpeedService extends Service {
                 .setContentTitle("📡 Speed Monitor")
                 .setContentText(String.format(Locale.US, "⬇️ %.1f Mbps | ⬆️ %.1f Mbps", download, upload))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(
-                        String.format("Download: %.2f Mbps\nUpload: %.2f Mbps\nPing: %s\nLast update: %s", 
-                                download, upload, pingText, time)))
+                        String.format("Download: %.2f Mbps\nUpload: %.2f Mbps\nPing: %d ms\nLast update: %s",
+                                download, upload, ping, time)))
                 .setSmallIcon(android.R.drawable.ic_menu_upload)
-                .setContentIntent(openIntent)
+                .setContentIntent(openPendingIntent)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
