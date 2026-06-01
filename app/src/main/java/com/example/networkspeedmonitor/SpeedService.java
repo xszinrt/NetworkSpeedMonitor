@@ -63,7 +63,7 @@ public class SpeedService extends Service {
             return START_NOT_STICKY;
         }
 
-        startForeground(NOTIFICATION_ID, createNotification(0, 0));
+        startForeground(NOTIFICATION_ID, createNotification(0, 0, 0));
         startSpeedTest();
         return START_STICKY;
     }
@@ -94,17 +94,15 @@ public class SpeedService extends Service {
                 if (timeDiff > 0) {
                     downloadSpeed = (rxDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
                     uploadSpeed = (txDiff * 8.0) / (timeDiff / 1000.0) / 1000000.0;
-                    ping = timeDiff; // تقدير Ping من زمن الاستجابة
+                    ping = timeDiff;
                 }
 
-                // إرسال التحديث إلى الواجهة
                 Intent updateIntent = new Intent(ACTION_SPEED_UPDATE);
                 updateIntent.putExtra("download", downloadSpeed);
                 updateIntent.putExtra("upload", uploadSpeed);
                 updateIntent.putExtra("ping", ping);
                 sendBroadcast(updateIntent);
 
-                // تحديث الإشعار
                 updateNotification(downloadSpeed, uploadSpeed, ping);
 
                 lastRxBytes = currentRxBytes;
