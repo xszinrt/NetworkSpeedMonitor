@@ -7,9 +7,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.net.ConnectivityManager;
-import android.net.NetworkCapabilities;
-import android.net.TrafficStats;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -18,22 +15,22 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import androidx.core.app.NotificationCompat;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.URL;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 public class SpeedService extends Service {
 
     public static final String CHANNEL_ID = "speed_channel";
     public static final int NOTIFICATION_ID = 1;
     public static final String ACTION_STOP = "ACTION_STOP";
+    public static final String ACTION_SPEED_UPDATE = "SPEED_UPDATE";
 
     private Handler handler;
     private Runnable speedRunnable;
@@ -48,8 +45,6 @@ public class SpeedService extends Service {
         super.onCreate();
         createNotificationChannel();
         handler = new Handler(Looper.getMainLooper());
-        
-        // ✅ طلب تعطيل تحسين البطارية عند بدء الخدمة لأول مرة
         requestDisableBatteryOptimizations();
     }
 
@@ -89,7 +84,15 @@ public class SpeedService extends Service {
                 executor.execute(() -> {
                     long ping = measurePing();
                     double downloadSpeed = measureDownloadSpeed();
-                    updateUI(downloadSpeed, 0, ping);
+                    
+                    // إرسال التحديث إلى MainActivity عبر Broadcast عادي
+                    Intent updateIntent = new Intent(ACTION_SPEED_UPDATE);
+                    updateIntent.putExtra("download", downloadSpeed);
+                    updateIntent.putExtra("upload", 0.0);
+                    updateIntent.putExtra("ping", ping);
+                    sendBroadcast(updateIntent);
+                    
+                    // تحديث الإشعار
                     updateNotification(downloadSpeed, 0, ping);
                 });
 
@@ -102,12 +105,17 @@ public class SpeedService extends Service {
     private long measurePing() {
         try {
             long start = System.currentTimeMillis();
-            InetAddress address = InetAddress.getByName("8.8.8.8");
-            boolean reachable = address.isReachable(3000);
-            if (reachable) {
+            URL url = new URL(PING_URL);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            connection.setRequestMethod("GET");
+            int responseCode = connection.getResponseCode();
+            if (responseCode == 200) {
                 return System.currentTimeMillis() - start;
             }
-        } catch (IOException e) {
+            connection.disconnect();
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return -1;
@@ -147,14 +155,6 @@ public class SpeedService extends Service {
             }
         }
         return 0;
-    }
-
-    private void updateUI(double download, double upload, long ping) {
-        Intent intent = new Intent("SPEED_UPDATE");
-        intent.putExtra("download", download);
-        intent.putExtra("upload", upload);
-        intent.putExtra("ping", ping);
-        sendBroadcast(intent);
     }
 
     private void updateNotification(double download, double upload, long ping) {

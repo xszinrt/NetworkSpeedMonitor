@@ -15,7 +15,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -24,7 +23,6 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView tvDownload, tvUpload, tvPing, tvLastUpdate;
     private Button btnStart, btnStop;
-    private boolean isServiceRunning = false;
 
     private final BroadcastReceiver speedReceiver = new BroadcastReceiver() {
         @Override
@@ -73,7 +71,9 @@ public class MainActivity extends AppCompatActivity {
         btnStart.setOnClickListener(v -> startService());
         btnStop.setOnClickListener(v -> stopService());
 
-        LocalBroadcastManager.getInstance(this).registerReceiver(speedReceiver, new IntentFilter("SPEED_UPDATE"));
+        // تسجيل BroadcastReceiver عادي (وليس Local)
+        IntentFilter filter = new IntentFilter(SpeedService.ACTION_SPEED_UPDATE);
+        registerReceiver(speedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
     }
 
     private void startService() {
@@ -83,17 +83,15 @@ public class MainActivity extends AppCompatActivity {
         } else {
             startService(intent);
         }
-        isServiceRunning = true;
         btnStart.setEnabled(false);
         btnStop.setEnabled(true);
-        Toast.makeText(this, "Speed monitoring started (measuring every 30s)", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Speed monitoring started", Toast.LENGTH_SHORT).show();
     }
 
     private void stopService() {
         Intent intent = new Intent(this, SpeedService.class);
         intent.setAction(SpeedService.ACTION_STOP);
         startService(intent);
-        isServiceRunning = false;
         btnStart.setEnabled(true);
         btnStop.setEnabled(false);
         Toast.makeText(this, "Speed monitoring stopped", Toast.LENGTH_SHORT).show();
@@ -102,6 +100,6 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(speedReceiver);
+        unregisterReceiver(speedReceiver);
     }
 }
