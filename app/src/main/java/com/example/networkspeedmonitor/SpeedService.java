@@ -15,8 +15,7 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import androidx.core.app.NotificationCompat;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
@@ -37,8 +36,18 @@ public class SpeedService extends Service {
     private boolean isRunning = false;
     private ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    private static final String TEST_URL = "https://speed.cloudflare.com/__down?bytes=5000000";
-    private static final String PING_URL = "https://cloudflare.com/cdn-cgi/trace";
+    // خوادم متعددة لقياس السرعة
+    private static final String[] TEST_URLS = {
+        "https://speed.cloudflare.com/__down?bytes=5000000",
+        "https://speedtest.tele2.net/5MB.zip",
+        "https://proof.ovh.net/files/5Mb.dat"
+    };
+    
+    private static final String[] PING_URLS = {
+        "https://cloudflare.com/cdn-cgi/trace",
+        "https://www.google.com/generate_204",
+        "https://www.microsoft.com/robots.txt"
+    };
 
     @Override
     public void onCreate() {
@@ -85,14 +94,12 @@ public class SpeedService extends Service {
                     long ping = measurePing();
                     double downloadSpeed = measureDownloadSpeed();
                     
-                    // إرسال التحديث إلى MainActivity عبر Broadcast عادي
                     Intent updateIntent = new Intent(ACTION_SPEED_UPDATE);
                     updateIntent.putExtra("download", downloadSpeed);
                     updateIntent.putExtra("upload", 0.0);
                     updateIntent.putExtra("ping", ping);
                     sendBroadcast(updateIntent);
                     
-                    // تحديث الإشعار
                     updateNotification(downloadSpeed, 0, ping);
                 });
 
@@ -103,55 +110,69 @@ public class SpeedService extends Service {
     }
 
     private long measurePing() {
-        try {
-            long start = System.currentTimeMillis();
-            URL url = new URL(PING_URL);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(5000);
-            connection.setRequestMethod("GET");
-            int responseCode = connection.getResponseCode();
-            if (responseCode == 200) {
-                return System.currentTimeMillis() - start;
+        for (String pingUrl : PING_URLS) {
+            try {
+                long start = System.currentTimeMillis();
+                URL url = new URL(pingUrl);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setRequestMethod("HEAD");
+                int responseCode = connection.getResponseCode();
+                if (responseCode == 200 || responseCode == 204) {
+                    connection.disconnect();
+                    return System.currentTimeMillis() - start;
+                }
+                connection.disconnect();
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-            connection.disconnect();
-        } catch (Exception e) {
-            e.printStackTrace();
         }
         return -1;
     }
 
     private double measureDownloadSpeed() {
-        HttpURLConnection connection = null;
-        try {
-            long start = System.currentTimeMillis();
-            URL url = new URL(TEST_URL);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(10000);
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("User-Agent", "SpeedMonitor/1.0");
-            
-            int responseCode = connection.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                int contentLength = connection.getContentLength();
-                if (contentLength <= 0) return 0;
+        for (String testUrl : TEST_URLS) {
+            HttpURLConnection connection = null;
+            try {
+                long start = System.currentTimeMillis();
+                URL url = new URL(testUrl);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("User-Agent", "SpeedMonitor/1.0");
                 
-                connection.getInputStream().close();
-                long end = System.currentTimeMillis();
-                long timeMs = end - start;
-                
-                if (timeMs > 0) {
-                    double megabits = (contentLength * 8.0) / 1000000.0;
-                    double seconds = timeMs / 1000.0;
-                    return megabits / seconds;
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    int contentLength = connection.getContentLength();
+                    if (contentLength <= 0) continue;
+                    
+                    // قراءة البيانات لضمان اكتمال التحميل
+                    InputStream is = connection.getInputStream();
+                    byte[] buffer = new byte[8192];
+                    long totalRead = 0;
+                    while (is.read(buffer) != -1) {
+                        totalRead += buffer.length;
+                        if (totalRead >= contentLength) break;
+                    }
+                    is.close();
+                    
+                    long end = System.currentTimeMillis();
+                    long timeMs = end - start;
+                    
+                    if (timeMs > 0 && contentLength > 0) {
+                        double megabits = (contentLength * 8.0) / 1000000.0;
+                        double seconds = timeMs / 1000.0;
+                        return megabits / seconds;
+                    }
                 }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         }
         return 0;
