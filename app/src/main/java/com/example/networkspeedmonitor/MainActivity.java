@@ -46,7 +46,7 @@ public class MainActivity extends AppCompatActivity {
             new ActivityResultContracts.RequestPermission(),
             isGranted -> {
                 if (!isGranted) {
-                    Toast.makeText(this, "Notification permission required for background monitoring", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Notification permission required", Toast.LENGTH_LONG).show();
                 }
             }
     );
@@ -63,7 +63,6 @@ public class MainActivity extends AppCompatActivity {
         btnStart = findViewById(R.id.btnStart);
         btnStop = findViewById(R.id.btnStop);
 
-        // Request notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -87,7 +86,7 @@ public class MainActivity extends AppCompatActivity {
         isServiceRunning = true;
         btnStart.setEnabled(false);
         btnStop.setEnabled(true);
-        Toast.makeText(this, "Speed monitoring started", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Speed monitoring started (measuring every 30s)", Toast.LENGTH_SHORT).show();
     }
 
     private void stopService() {

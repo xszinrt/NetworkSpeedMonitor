@@ -7,14 +7,15 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.net.TrafficStats;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import androidx.core.app.NotificationCompat;
-import java.io.IOException;
-import java.net.InetAddress;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -33,9 +34,9 @@ public class SpeedService extends Service {
     private boolean isRunning = false;
     private ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    private long lastRxBytes = 0;
-    private long lastTxBytes = 0;
-    private long lastTime = 0;
+    // URLs للاختبار
+    private static final String TEST_URL = "https://speed.cloudflare.com/__down?bytes=5000000"; // 5MB
+    private static final String PING_URL = "https://cloudflare.com/cdn-cgi/trace";
 
     @Override
     public void onCreate() {
@@ -59,40 +60,29 @@ public class SpeedService extends Service {
 
     private void startSpeedTest() {
         isRunning = true;
-        lastRxBytes = TrafficStats.getTotalRxBytes();
-        lastTxBytes = TrafficStats.getTotalTxBytes();
-        lastTime = System.currentTimeMillis();
 
         speedRunnable = new Runnable() {
             @Override
             public void run() {
                 if (!isRunning) return;
 
-                long now = System.currentTimeMillis();
-                long currentRxBytes = TrafficStats.getTotalRxBytes();
-                long currentTxBytes = TrafficStats.getTotalTxBytes();
+                executor.execute(() -> {
+                    // قياس Ping
+                    long ping = measurePing();
+                    
+                    // قياس سرعة التحميل
+                    double downloadSpeed = measureDownloadSpeed();
+                    
+                    // قياس سرعة الرفع (اختياري - يمكن إضافته لاحقاً)
+                    double uploadSpeed = 0;
+                    
+                    // تحديث الواجهة والإشعار
+                    updateUI(downloadSpeed, uploadSpeed, ping);
+                    updateNotification(downloadSpeed, uploadSpeed, ping);
+                });
 
-                long timeDiff = now - lastTime;
-                if (timeDiff > 0) {
-                    // Download speed (Mbps)
-                    double rxSpeed = (currentRxBytes - lastRxBytes) * 8.0 / (timeDiff / 1000.0) / 1000000.0;
-                    // Upload speed (Mbps)
-                    double txSpeed = (currentTxBytes - lastTxBytes) * 8.0 / (timeDiff / 1000.0) / 1000000.0;
-
-                    // Measure ping
-                    executor.execute(() -> {
-                        long ping = measurePing();
-                        updateUI(rxSpeed, txSpeed, ping);
-                        updateNotification(rxSpeed, txSpeed, ping);
-                    });
-
-                    lastRxBytes = currentRxBytes;
-                    lastTxBytes = currentTxBytes;
-                    lastTime = now;
-                }
-
-                // Update every 2 seconds
-                handler.postDelayed(this, 2000);
+                // قياس كل 30 ثانية (لتجنب استهلاك البيانات)
+                handler.postDelayed(this, 30000);
             }
         };
         handler.post(speedRunnable);
@@ -101,15 +91,63 @@ public class SpeedService extends Service {
     private long measurePing() {
         try {
             long start = System.currentTimeMillis();
-            InetAddress address = InetAddress.getByName("8.8.8.8");
-            boolean reachable = address.isReachable(3000);
-            if (reachable) {
+            URL url = new URL(PING_URL);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(3000);
+            connection.setReadTimeout(3000);
+            connection.setRequestMethod("GET");
+            int responseCode = connection.getResponseCode();
+            if (responseCode == 200) {
                 return System.currentTimeMillis() - start;
             }
-        } catch (IOException e) {
+            connection.disconnect();
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return -1;
+    }
+
+    private double measureDownloadSpeed() {
+        HttpURLConnection connection = null;
+        try {
+            long start = System.currentTimeMillis();
+            URL url = new URL(TEST_URL);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("User-Agent", "SpeedMonitor/1.0");
+            
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                // قراءة البيانات وحساب الحجم
+                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                char[] buffer = new char[8192];
+                int bytesRead;
+                long totalBytes = 0;
+                while ((bytesRead = reader.read(buffer)) != -1) {
+                    totalBytes += bytesRead * 2; // تقريبي لتحويل char إلى بايت
+                }
+                reader.close();
+                
+                long end = System.currentTimeMillis();
+                long timeMs = end - start;
+                
+                if (timeMs > 0) {
+                    // حساب السرعة بالميجابت في الثانية
+                    double megabits = (totalBytes * 8.0) / 1000000.0;
+                    double seconds = timeMs / 1000.0;
+                    return megabits / seconds;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+        return 0;
     }
 
     private void updateUI(double download, double upload, long ping) {
@@ -129,6 +167,7 @@ public class SpeedService extends Service {
 
     private Notification createNotification(double download, double upload, long ping) {
         String pingText = ping > 0 ? ping + " ms" : "N/A";
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
         Intent stopIntent = new Intent(this, SpeedService.class);
         stopIntent.setAction(ACTION_STOP);
@@ -141,9 +180,9 @@ public class SpeedService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("📡 Speed Monitor")
-                .setContentText(String.format(Locale.US, "⬇️ %.1f Mbps | ⬆️ %.1f Mbps | 🕒 %s", download, upload, pingText))
+                .setContentText(String.format(Locale.US, "⬇️ %.1f Mbps | 🕒 %s | %s", download, pingText, time))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(
-                        String.format("Download: %.2f Mbps\nUpload: %.2f Mbps\nPing: %s", download, upload, pingText)))
+                        String.format("Download: %.2f Mbps\nPing: %s\nLast update: %s", download, pingText, time)))
                 .setSmallIcon(android.R.drawable.ic_menu_upload)
                 .setContentIntent(openPendingIntent)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
